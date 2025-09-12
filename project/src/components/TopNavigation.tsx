@@ -30,7 +30,7 @@ const TopNavigation: React.FC<TopNavigationProps> = ({ onCommandToggle, commandV
           </div>
 
           {/* Command Line */}
-          <div className="relative">
+          {/* <div className="relative">
             <button
               onClick={onCommandToggle}
               className="flex items-center space-x-2 bg-gray-800 hover:bg-gray-700 px-3 py-2 rounded-md transition-colors"
@@ -56,10 +56,10 @@ const TopNavigation: React.FC<TopNavigationProps> = ({ onCommandToggle, commandV
                 </div>
               </div>
             )}
-          </div>
+          </div> */}
 
           {/* Market Selector */}
-          <select 
+          {/* <select 
             value={selectedMarket}
             onChange={(e) => setSelectedMarket(e.target.value)}
             className="bg-gray-800 border border-gray-600 rounded px-3 py-2 text-sm focus:border-blue-400 focus:outline-none"
@@ -67,7 +67,7 @@ const TopNavigation: React.FC<TopNavigationProps> = ({ onCommandToggle, commandV
             {markets.map(market => (
               <option key={market} value={market}>{market}</option>
             ))}
-          </select>
+          </select> */}
         </div>
 
         <div className="flex items-center space-x-4">
