@@ -1,25 +1,27 @@
 # file: app/api/users.py
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.deps import get_db, get_current_user
+from app.models import User
 from app.schemas.schemas import UserProfile, UserCreate
-from app.deps import get_current_user
 import uuid
+from app.deps import hash_password
 
 router = APIRouter()
 
-# in-memory user store
-_users = {
-    "user-1": {"id": "user-1", "email": "demo@example.com", "full_name": "Demo User"}
-}
-
 @router.get("/me", response_model=UserProfile)
-def get_me(current=Depends(get_current_user)):
-    u = _users.get(current["id"])
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-    return u
+async def get_me(current=Depends(get_current_user)):
+    return {"id": current.id, "email": current.email, "full_name": current.full_name}
 
 @router.post("/", response_model=UserProfile)
-def create_user(cmd: UserCreate):
+async def create_user(cmd: UserCreate, db: AsyncSession = Depends(get_db)):
+    q = await db.execute(select(User).where(User.email == cmd.email))
+    if q.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="User exists")
     uid = str(uuid.uuid4())
-    _users[uid] = {"id": uid, "email": cmd.email, "full_name": cmd.full_name}
-    return _users[uid]
+    user = User(id=uid, email=cmd.email, full_name=cmd.full_name, hashed_password=hash_password("changeme"))
+    db.add(user)
+    await db.commit()
+    await db.refresh(user)
+    return {"id": user.id, "email": user.email, "full_name": user.full_name}

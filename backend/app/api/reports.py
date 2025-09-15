@@ -1,48 +1,38 @@
 # file: app/api/reports.py
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from app.schemas.schemas import ReportRequest, ReportResponse
-from app.deps import get_current_user
-import uuid
-from time import sleep
-from typing import Dict
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.deps import get_db, get_current_user
+from app.models import Report
+from app.schemas.schemas import ReportRequest
+import uuid, asyncio
 
 router = APIRouter()
 
-_reports: Dict[str, dict] = {}
-
-def _generate_report_sync(report_id: str, template: str, workspace_id: str, fmt: str):
-    """
-    Synchronous simulation of a long-running report generation task.
-    In production replace with a proper background worker that writes to S3/MinIO.
-    """
-    # simulate heavy work
-    sleep(2)
-    _reports[report_id] = {
-        "id": report_id,
-        "status": "ready",
-        "download_url": f"/reports/download/{report_id}.{fmt}"
-    }
-
-@router.post("/generate", response_model=ReportResponse)
-def generate_report(
-    req: ReportRequest,
-    background: BackgroundTasks,
-    current=Depends(get_current_user),
-):
-    """
-    Enqueue a report generation task. Uses FastAPI BackgroundTasks for demo.
-    In production: push to Celery/RQ and return job id.
-    """
+@router.post("/generate")
+async def generate_report(req: ReportRequest, background: BackgroundTasks, db: AsyncSession = Depends(get_db), current=Depends(get_current_user)):
     rid = str(uuid.uuid4())
-    _reports[rid] = {"id": rid, "status": "pending"}
-    # enqueue background task (FastAPI-managed for the request lifecycle)
-    background.add_task(_generate_report_sync, rid, req.template, req.workspace_id or "", req.format)
-    return ReportResponse(report_id=rid, status="pending")
+    rep = Report(id=rid, owner_id=current.id, template=req.template, workspace_id=req.workspace_id, format=req.format, status="pending")
+    db.add(rep)
+    await db.commit()
+    await db.refresh(rep)
 
-@router.get("/download/{report_id}.{ext}")
-def download_stub(report_id: str, ext: str):
-    rep = _reports.get(report_id)
-    if not rep or rep.get("status") != "ready":
-        raise HTTPException(status_code=404, detail="Report not ready")
-    # In prod return FileResponse or signed S3 URL
-    return {"report_id": report_id, "download": f"stub://{report_id}.{ext}"}
+    # enqueue background task: we'll simulate saving S3 URL after some async work
+    async def _generate_and_mark(report_id: str):
+        await asyncio.sleep(2)  # simulate long work / call to report engine
+        # mark report ready
+        r = await db.get(Report, report_id)
+        if r:
+            r.status = "ready"
+            r.s3_url = f"https://example-bucket.s3.local/{report_id}.{r.format}"
+            await db.commit()
+    background.add_task(asyncio.create_task, _generate_and_mark(rid))
+    return {"report_id": rid, "status": "pending"}
+
+@router.get("/download/{report_id}")
+async def download_report(report_id: str, db: AsyncSession = Depends(get_db), current=Depends(get_current_user)):
+    r = await db.get(Report, report_id)
+    if not r or r.owner_id != current.id:
+        raise HTTPException(status_code=404, detail="report not found")
+    if r.status != "ready":
+        raise HTTPException(status_code=400, detail="not ready")
+    return {"s3_url": r.s3_url}

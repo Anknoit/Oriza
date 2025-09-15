@@ -4,7 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import auth, users, commodities, market_data, supply, weather, ws, workspaces, alerts, reports
 
-app = FastAPI(title="Tasaar Oriza - MVP")
+app = FastAPI(title="oriza Oriza - MVP")
 
 # CORS (adjust origins as needed)
 app.add_middleware(

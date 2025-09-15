@@ -1,25 +1,31 @@
-# file: app/api/workspaces.py
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from app.schemas.schemas import WorkspaceCreate, WorkspaceResponse
-from app.deps import get_current_user
 import uuid
+from sqlalchemy import insert, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.deps import get_db, get_current_user
+from app.models import Workspace
+from app.schemas.schemas import WorkspaceCreate
 
 router = APIRouter()
 
-# in-memory workspace store per user
 _workspaces = {}
 
-@router.post("/", response_model=WorkspaceResponse)
-def create_workspace(cmd: WorkspaceCreate, current=Depends(get_current_user)):
+@router.post("/")
+async def create_workspace(cmd: WorkspaceCreate, db: AsyncSession = Depends(get_db), current=Depends(get_current_user)):
     wid = str(uuid.uuid4())
-    owner = current["id"]
-    obj = {"id": wid, "owner_id": owner, "name": cmd.name, "layout": cmd.layout, "widgets": cmd.widgets}
-    _workspaces.setdefault(owner, {})[wid] = obj
-    return obj
+    ws = Workspace(id=wid, owner_id=current.id, name=cmd.name, layout=cmd.layout, widgets=cmd.widgets)
+    db.add(ws)
+    await db.commit()
+    await db.refresh(ws)
+    return ws
 
-@router.get("/", response_model=list[WorkspaceResponse])
-def list_workspaces(current=Depends(get_current_user)):
-    return list(_workspaces.get(current["id"], {}).values())
+@router.get("/")
+async def list_workspaces(db: AsyncSession = Depends(get_db), current=Depends(get_current_user)):
+    q = await db.execute(select(Workspace).where(Workspace.owner_id == current.id))
+    rows = q.scalars().all()
+    return rows
+
 
 @router.get("/{wid}", response_model=WorkspaceResponse)
 def get_workspace(wid: str, current=Depends(get_current_user)):

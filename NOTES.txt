@@ -1,0 +1,112 @@
+1. async SQLAlchemy - helps in async DB operations, helps in concurrency, multiple DB operatrions running parallely without dependency on completion of one operation over other.
+
+
+ALEMBIC SETUP
+- alembic init alembic
+- alembic.ini
+# file: alembic.ini
+[alembic]
+script_location = alembic
+# sqlalchemy.url is intentionally a placeholder; runtime env.py will set the actual URL.
+sqlalchemy.url = driver://user:pass@localhost/dbname
+
+[loggers]
+keys = root,sqlalchemy,alembic
+
+[handlers]
+keys = console
+
+[formatters]
+keys = generic
+
+[logger_root]
+level = WARN
+handlers = console
+qualname =
+
+[handler_console]
+class = StreamHandler
+args = (sys.stderr,)
+level = NOTSET
+formatter = generic
+
+[formatter_generic]
+format = %(levelname)-5.5s [%(name)s] %(message)s
+
+- env.py
+# file: alembic/env.py
+import asyncio
+import os
+from logging.config import fileConfig
+from sqlalchemy import pool
+from sqlalchemy.engine import Connection
+from sqlalchemy import engine_from_config
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+from alembic import context
+
+# this loads the logging config from alembic.ini
+config = context.config
+fileConfig(config.config_file_name)
+
+# Try to read DB URL from environment (preferred).
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# If not set, fallback to app.db (which loads .env via python-dotenv)
+if not DATABASE_URL:
+    try:
+        from app.db import DATABASE_URL as APP_DB_URL
+        DATABASE_URL = APP_DB_URL
+    except Exception:
+        raise RuntimeError("DATABASE_URL not set and app.db not importable.")
+
+# Import your models' Base metadata here
+# Make sure the import path is correct relative to alembic/env.py
+from app.models import Base  # noqa
+target_metadata = Base.metadata
+
+def run_migrations_offline():
+    """Run migrations in 'offline' mode (no DB connection)."""
+    url = DATABASE_URL
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        dialect_opts={"paramstyle": "named"},
+    )
+    with context.begin_transaction():
+        context.run_migrations()
+
+def do_run_migrations(connection: Connection):
+    context.configure(connection=connection, target_metadata=target_metadata)
+    with context.begin_transaction():
+        context.run_migrations()
+
+async def run_migrations_online():
+    """Run migrations in 'online' mode using AsyncEngine."""
+    connectable = create_async_engine(
+        DATABASE_URL,
+        poolclass=pool.NullPool,
+    )
+    async with connectable.connect() as connection:
+        await connection.run_sync(do_run_migrations)
+    await connectable.dispose()
+
+if context.is_offline_mode():
+    run_migrations_offline()
+else:
+    asyncio.run(run_migrations_online())
+
+- .env
+# file: .env
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/oriza
+
+- Set environment var (Linux/macOS):
+export DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/oriza"
+
+- migrations
+alembic revision --autogenerate -m "init models"
+
+- Apply migrations
+alembic upgrade head
+

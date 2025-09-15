@@ -1,8 +1,14 @@
 # file: app/api/supply.py
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from datetime import datetime, timedelta
 from app.schemas.schemas import StorageLevel
 import random
+# file: app/api/supply.py
+from sqlalchemy import select, desc
+from sqlalchemy.ext.asyncio import AsyncSession
+from app.models import StorageLevel
+from app.deps import get_db
+
 
 router = APIRouter()
 
@@ -20,9 +26,15 @@ def _seed_storage(symbol="NG", region="US"):
 
 _seed_storage()
 
-@router.get("/{symbol}/storage", response_model=list[StorageLevel])
-def get_storage(symbol: str, region: str = "US"):
-    key = f"{symbol.upper()}-{region.upper()}"
-    if key not in _storage_demo:
-        _seed_storage(symbol.upper(), region.upper())
-    return _storage_demo[key]
+
+
+@router.get("/{symbol}/storage")
+async def get_storage(symbol: str, region: str = "US", db: AsyncSession = Depends(get_db)):
+    q = await db.execute(
+        select(StorageLevel)
+        .where(StorageLevel.symbol == symbol.upper(), StorageLevel.region == region.upper())
+        .order_by(desc(StorageLevel.ts))
+        .limit(500)
+    )
+    rows = q.scalars().all()
+    return list(rows)
