@@ -28,7 +28,7 @@ interface NavItem {
 
 const LeftSidebar: React.FC<LeftSidebarProps> = ({ activeSection, onSectionChange }) => {
   const navItems: NavItem[] = [
-    { id: 'home', label: 'Dashboard', icon: <Home className="w-5 h-5" /> },
+    { id: 'home', label: 'News', icon: <Home className="w-5 h-5" /> },
     { id: 'market-data', label: 'Market Data', icon: <BarChart3 className="w-5 h-5" /> },
     { id: 'supply-demand', label: 'Supply & Demand', icon: <Zap className="w-5 h-5" />, badge: '3' },
     { id: 'macro', label: 'Macro & Geopolitics', icon: <Globe className="w-5 h-5" /> },
