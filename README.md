@@ -1,7 +1,7 @@
 <!-- file: README.md -->
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/your-username/oriza/main/docs/banner.png" alt="Oriza Banner" width="100%" />
+  <img src="oriza.png" alt="Oriza Banner" width="100%" />
 </p>
 
 <h1 align="center">🌾 Oriza</h1>
