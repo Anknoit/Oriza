@@ -3,6 +3,7 @@ import Dashboard from './panels/Dashboard';
 import NaturalGasPanel from './panels/NaturalGasPanel';
 import MarketDataPanel from './panels/MarketDataPanel';
 import SupplyDemandPanel from './panels/SupplyDemandPanel';
+import NewsPanel from './panels/NewsPanel';
 
 interface MainContentProps {
   activeSection: string;
@@ -18,7 +19,8 @@ const MainContent: React.FC<MainContentProps> = ({ activeSection }) => {
       case 'supply-demand':
         return <SupplyDemandPanel />;
       default:
-        return <Dashboard />;
+        // return <Dashboard />;
+        return <NewsPanel />;
     }
   };
 
