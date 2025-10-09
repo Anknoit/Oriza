@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import auth, users, commodities, market_data, supply, weather, ws, workspaces, alerts, reports
+from app.api import auth, users, commodities, market_data, supply, weather, ws, workspaces, alerts, reports, news_sources
 
 app = FastAPI(title="oriza Oriza - MVP")
 
@@ -25,6 +25,8 @@ app.include_router(ws.router, tags=["ws"])  # websockets
 app.include_router(workspaces.router, prefix="/workspaces", tags=["workspaces"])
 app.include_router(alerts.router, prefix="/alerts", tags=["alerts"])
 app.include_router(reports.router, prefix="/reports", tags=["reports"])
+app.include_router(news_sources.router, tags=["news"])
+
 
 @app.get("/health", tags=["system"])
 def health():

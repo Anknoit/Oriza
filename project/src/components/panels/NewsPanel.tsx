@@ -22,52 +22,38 @@ type NewsItem = {
   url?: string;
 };
 
-const mockInitial: NewsItem[] = [
-  {
-    id: "n1",
-    headline: "Europe LNG Imports Fall 8% as Spot Prices Spike",
-    source: "EnergyWire",
-    ts: new Date(Date.now() - 1000 * 60 * 2).toISOString(),
-    summary:
-      "LNG imports into northwest Europe fell by 8% week-on-week amid higher spot prices and limited shipping availability.",
-    sentiment: "negative",
-    tickers: ["JKM", "TTF"],
-    tags: ["LNG", "Supply"],
-    url: "#",
-  },
-  {
-    id: "n2",
-    headline: "U.S. Natural Gas Storage Below 5-yr Avg; Analysts Watch Heating Demand",
-    source: "EIA/Desk",
-    ts: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    summary:
-      "Weekly storage reports show inventory under the five-year average ahead of winter, increasing upside risk for prices.",
-    sentiment: "positive",
-    tickers: ["NG"],
-    tags: ["Storage", "EIA"],
-    url: "#",
-  },
-  {
-    id: "n3",
-    headline: "OPEC Meeting Ends With No Change to Quotas",
-    source: "Reuters",
-    ts: new Date(Date.now() - 1000 * 60 * 60).toISOString(),
-    summary:
-      "OPEC has decided to keep current production quotas unchanged, leaving markets to trade on demand data.",
-    sentiment: "neutral",
-    tickers: ["WTI", "Brent"],
-    tags: ["OPEC", "Policy"],
-    url: "#",
-  },
-];
+const MAX_ITEMS = 200;
 
-function timeAgo(iso: string) {
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+/** Safe timeAgo */
+function timeAgo(iso?: string) {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "—";
+  const diff = Math.floor((Date.now() - t) / 1000);
   if (diff < 60) return `${diff}s`;
   if (diff < 3600) return `${Math.floor(diff / 60)}m`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h`;
   return `${Math.floor(diff / 86400)}d`;
 }
+
+/** Resolve WS URL at runtime safely. */
+const getWsUrl = () => {
+  if (typeof window === "undefined") {
+    // Return a default for server-side rendering
+    return "ws://localhost:8000/ws/news";
+  }
+
+  // Use dynamic origin to support different environments (dev/prod)
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const hostname = window.location.hostname;
+  const port = window.location.port ? `:${window.location.port}` : "";
+  
+  // The endpoint path is always /ws/news
+  return `${protocol}://${hostname}${port}/ws/news`;
+};
+
+// Example usage in your WebSocket client
+const ws = new WebSocket(getWsUrl());
 
 function SentimentPill({ s }: { s?: NewsItem["sentiment"] }) {
   if (s === "positive")
@@ -89,42 +75,131 @@ function SentimentPill({ s }: { s?: NewsItem["sentiment"] }) {
   );
 }
 
+/** Hook: WebSocket connection with reconnection/backoff.
+ *  Also exposes connectionStatus for quick debugging in UI.
+ */
+function useNewsSocket(initial: NewsItem[] = []) {
+  const [items, setItems] = useState<NewsItem[]>(initial);
+  const [connectionStatus, setConnectionStatus] = useState<"idle" | "connecting" | "open" | "closed" | "error">(
+    "idle"
+  );
+  const wsRef = useRef<WebSocket | null>(null);
+  const backoffRef = useRef<number>(1000);
+  const shouldReconnect = useRef(true);
+
+  useEffect(() => {
+    shouldReconnect.current = true;
+    const WS_URL = getWsUrl();
+
+    function connect() {
+      try {
+        if (typeof WebSocket === "undefined") {
+          console.warn("WebSocket not supported in this environment.");
+          setConnectionStatus("error");
+          return;
+        }
+
+        setConnectionStatus("connecting");
+        const ws = new WebSocket(WS_URL);
+        wsRef.current = ws;
+
+        ws.addEventListener("open", () => {
+          console.log("news ws open", WS_URL);
+          backoffRef.current = 1000;
+          setConnectionStatus("open");
+        });
+
+        ws.addEventListener("message", (ev) => {
+          try {
+            const raw = ev.data;
+            let msg: any = null;
+            if (typeof raw === "string") {
+              msg = JSON.parse(raw);
+            } else {
+              // ignore binary for now
+              return;
+            }
+            if (!msg) return;
+            if (msg.type === "init") {
+              const uniq: Record<string, NewsItem> = {};
+              (Array.isArray(msg.items) ? msg.items : []).forEach((it: NewsItem) => {
+                if (it && it.id) uniq[it.id] = it;
+              });
+              const arr = Object.values(uniq).slice(0, MAX_ITEMS);
+              setItems(arr);
+            } else if (msg.type === "batch") {
+              setItems((prev) => {
+                const existing = new Set(prev.map((p) => p.id));
+                const incoming: NewsItem[] = (Array.isArray(msg.items) ? msg.items : []).filter(
+                  (i: NewsItem) => i && i.id && !existing.has(i.id)
+                );
+                const merged = [...incoming, ...prev].slice(0, MAX_ITEMS);
+                return merged;
+              });
+            }
+          } catch (e) {
+            console.error("ws message parse error", e);
+          }
+        });
+
+        ws.addEventListener("close", (ev) => {
+          console.log("news ws closed", ev);
+          setConnectionStatus("closed");
+          if (shouldReconnect.current) {
+            const delay = backoffRef.current;
+            backoffRef.current = Math.min(Math.floor(backoffRef.current * 1.5), 30_000);
+            setTimeout(connect, delay);
+          }
+        });
+
+        ws.addEventListener("error", (err) => {
+          console.warn("news ws error", err);
+          setConnectionStatus("error");
+          try {
+            ws.close();
+          } catch {}
+        });
+      } catch (e) {
+        console.error("failed to create websocket", e);
+        setConnectionStatus("error");
+        if (shouldReconnect.current) {
+          setTimeout(connect, backoffRef.current);
+          backoffRef.current = Math.min(Math.floor(backoffRef.current * 1.5), 30_000);
+        }
+      }
+    }
+
+    connect();
+
+    return () => {
+      shouldReconnect.current = false;
+      try {
+        wsRef.current?.close();
+      } catch {}
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return { items, setItems, wsRef, connectionStatus } as const;
+}
+
 export default function NewsPanel() {
-  const [items, setItems] = useState<NewsItem[]>(mockInitial);
-  const [selectedId, setSelectedId] = useState<string | null>(items[0]?.id ?? null);
+  const { items, setItems, connectionStatus } = useNewsSocket([]);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const [filterQuery, setFilterQuery] = useState("");
   const [onlyAlerts, setOnlyAlerts] = useState(false);
   const listRef = useRef<HTMLDivElement | null>(null);
 
-  // simulate incoming feed (replace with real WS)
+  // set initial selected when items change
   useEffect(() => {
-    const t = setInterval(() => {
-      const now = new Date();
-      const id = `n${now.getTime()}`;
-      const n: NewsItem = {
-        id,
-        headline: ["Breaking: Gas shipment delayed at port", "Market edges higher on US data", "Storage build higher than expected"][
-          Math.floor(Math.random() * 3)
-        ],
-        source: ["Desk", "Reuters", "Bloomberg"][Math.floor(Math.random() * 3)],
-        ts: now.toISOString(),
-        summary: "Auto-generated demo summary for incoming headline. Replace with real content.",
-        sentiment: ["positive", "neutral", "negative"][Math.floor(Math.random() * 3)] as NewsItem["sentiment"],
-        tickers: ["NG", "WTI"].slice(0, Math.floor(Math.random() * 2) + 1),
-        tags: ["Supply", "Macro", "Weather"].slice(0, Math.floor(Math.random() * 2) + 1),
-        url: "#",
-      };
-      setItems((s) => [n, ...s].slice(0, 200));
-    }, 8000);
-    return () => clearInterval(t);
-  }, []);
+    if (!selectedId && items.length > 0) setSelectedId(items[0].id);
+  }, [items, selectedId]);
 
   // keyboard navigation: j/k to move, enter to open
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (["INPUT", "TEXTAREA"].includes((document.activeElement?.tagName || "").toUpperCase())) return;
       if (e.key === "j") {
-        // next
         setSelectedId((cur) => {
           const idx = items.findIndex((x) => x.id === cur);
           const next = items[Math.min(idx + 1, items.length - 1)]?.id;
@@ -179,8 +254,6 @@ export default function NewsPanel() {
       <div className="flex items-center justify-between px-4 py-2 border-b border-slate-800/60 bg-[#061017]">
         <div className="flex items-center space-x-4">
           <div className="text-xs text-slate-400 uppercase tracking-wide">Oriza News Panel</div>
-
-
         </div>
 
         <div className="flex items-center space-x-3">
@@ -199,151 +272,89 @@ export default function NewsPanel() {
             )}
           </div>
 
-          <div className="text-xs text-slate-400">Updated {new Date().toLocaleTimeString()}</div>
+          <div className="text-xs text-slate-400">
+            Updated {new Date().toLocaleTimeString()} • WS:{" "}
+            <span className="uppercase">{connectionStatus}</span>
+          </div>
         </div>
       </div>
 
       {/* Body */}
       <div className="flex-1 grid grid-cols-12 gap-4 px-4 py-4">
-        {/* Left: filters / small stats */}
-          {/* <div className="bg-[#071019] border border-slate-800 rounded p-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm text-slate-400">Filters</div>
-              <div className="text-xs text-slate-500">Hotkeys: j/k</div>
-            </div>
-            <div className="mt-3 space-y-2 text-sm">
-              <label className="flex items-center space-x-2">
-                <input type="checkbox" checked={onlyAlerts} onChange={(e) => setOnlyAlerts(e.target.checked)} />
-                <span className="text-slate-300">Only alerts (tickers + sentiment)</span>
-              </label>
+        <div className="col-span-12">
+          <div
+            className="bg-[#071019] border border-slate-800 rounded flex flex-col overflow-hidden"
+            style={{ height: "760px" }}
+          >
+            {/* Header (fixed) */}
+            <div className="px-3 py-2 border-b border-slate-800/40 flex items-center justify-between">
+              <div className="text-sm text-slate-400">Latest Headlines {items.length}</div>
 
-              <div className="pt-2">
-                <div className="text-xs text-slate-500 uppercase">Sources</div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {["Reuters", "Bloomberg", "EnergyWire", "EIA", "Desk"].map((s) => (
+              <div className="flex items-center gap-4">
+                <div className="text-xs text-slate-500">
+                  {items.filter((i) => i.sentiment === "positive").length} Positive
+                </div>
+                <div className="text-xs text-slate-500">
+                  {items.filter((i) => i.sentiment === "negative").length} Negative
+                </div>
+                <div className="text-xs text-slate-500">
+                  {Array.from(new Set(items.map((i) => i.source))).length} Sources
+                </div>
+              </div>
+            </div>
+
+            {/* Scrollable list — takes remaining height */}
+            <div ref={listRef} className="flex-1 overflow-auto">
+              <div className="divide-y divide-slate-800">
+                {filtered.map((it) => {
+                  const isSelected = it.id === selectedId;
+                  return (
                     <button
-                      key={s}
-                      onClick={() => setFilterQuery(s)}
-                      className="text-xs px-2 py-1 rounded bg-slate-800/30 hover:bg-slate-800/50"
+                      key={it.id}
+                      data-id={it.id}
+                      onClick={() => setSelectedId(it.id)}
+                      className={`w-full text-left px-4 py-3 hover:bg-slate-800/30 flex items-start justify-between ${
+                        isSelected ? "bg-slate-800/40 border-l-4 border-amber-500" : ""
+                      }`}
                     >
-                      {s}
+                      <div className="flex-1">
+                        <div className="flex items-baseline justify-between">
+                          <h4 className="text-sm font-semibold text-white">{it.headline}</h4>
+                          <div className="text-xs text-slate-400 ml-3">{timeAgo(it.ts)}</div>
+                        </div>
+
+                        <div className="mt-1 flex items-center gap-3">
+                          <div className="text-xs text-slate-400">{it.source}</div>
+                          <div>
+                            <SentimentPill s={it.sentiment} />
+                          </div>
+                          <div className="text-xs text-slate-400">
+                            {it.tickers?.map((t) => (
+                              <span key={t} className="px-2 py-0.5 mr-1 rounded bg-slate-800/20 text-xs">
+                                {t}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div className="mt-2 text-sm text-slate-300 line-clamp-2">{it.summary}</div>
+                      </div>
+
+                      <div className="ml-4 flex flex-col items-end text-xs text-slate-400">
+                        <div>{it.tags?.map((tg) => <span key={tg} className="mr-1">#{tg}</span>)}</div>
+                        <ChevronRight className="w-5 h-5 text-slate-400" />
+                      </div>
                     </button>
-                  ))}
-                </div>
+                  );
+                })}
+
+                {filtered.length === 0 && (
+                  <div className="p-6 text-sm text-slate-400">No headlines yet — waiting for feed...</div>
+                )}
               </div>
             </div>
-          </div> */}
-
-          {/* <div className="bg-[#071019] border border-slate-800 rounded p-3">
-            <div className="text-xs text-slate-400">Quick Stats</div>
-            <div className="mt-3 grid grid-cols-2 gap-3">
-              <div className="p-2 rounded bg-slate-900/30">
-                <div className="text-xs text-slate-400">Headlines</div>
-                <div className="text-lg font-semibold text-white">{items.length}</div>
-              </div>
-              <div className="p-2 rounded bg-slate-900/30">
-                <div className="text-xs text-slate-400">Sources</div>
-                <div className="text-lg font-semibold text-white">
-                  {Array.from(new Set(items.map((i) => i.source))).length}
-                </div>
-              </div>
-              <div className="p-2 rounded bg-slate-900/30">
-                <div className="text-xs text-slate-400">Positive</div>
-                <div className="text-lg font-semibold text-emerald-300">
-                  {items.filter((i) => i.sentiment === "positive").length}
-                </div>
-              </div>
-              <div className="p-2 rounded bg-slate-900/30">
-                <div className="text-xs text-slate-400">Negative</div>
-                <div className="text-lg font-semibold text-rose-300">
-                  {items.filter((i) => i.sentiment === "negative").length}
-                </div>
-              </div>
-            </div>
-          </div> */}
-
-          {/* saved searches / watchlist */}
-          
-
-        {/* Center: headline list (dense) */}
-        <div className="col-span-12"> {/* use col-span-12 or simply w-full if not inside a grid */}
-  <div
-    className="bg-[#071019] border border-slate-800 rounded flex flex-col overflow-hidden"
-    style={{ height: "760px" }} // fixed height - change to desired px (or use Tailwind like h-[560px]
-  >
-    {/* Header (fixed) */}
-    <div className="px-3 py-2 border-b border-slate-800/40 flex items-center justify-between">
-      <div className="text-sm text-slate-400">Latest Headlines {items.length}</div>
-
-      <div className="flex items-center gap-4">
-        <div className="text-xs text-slate-500">
-          {items.filter((i) => i.sentiment === "positive").length} Positive
+          </div>
         </div>
-        <div className="text-xs text-slate-500">
-          {items.filter((i) => i.sentiment === "negative").length} Negative
-        </div>
-        <div className="text-xs text-slate-500">
-          {Array.from(new Set(items.map((i) => i.source))).length} Sources
-        </div>
-      </div>
-    </div>
-
-    {/* Scrollable list — takes remaining height */}
-    <div
-      ref={listRef}
-      className="flex-1 overflow-auto"
-      // optional: pause auto-scroll on hover when you implement auto-scroll logic
-      // onMouseEnter={() => setAutoScroll(false)} onMouseLeave={() => setAutoScroll(true)}
-    >
-      <div className="divide-y divide-slate-800">
-        {filtered.map((it) => {
-          const selected = it.id === selectedId;
-          return (
-            <button
-              key={it.id}
-              data-id={it.id}
-              onClick={() => setSelectedId(it.id)}
-              className={`w-full text-left px-4 py-3 hover:bg-slate-800/30 flex items-start justify-between ${
-                selected ? "bg-slate-800/40 border-l-4 border-amber-500" : ""
-              }`}
-            >
-              <div className="flex-1">
-                <div className="flex items-baseline justify-between">
-                  <h4 className="text-sm font-semibold text-white">{it.headline}</h4>
-                  <div className="text-xs text-slate-400 ml-3">{timeAgo(it.ts)}</div>
-                </div>
-
-                <div className="mt-1 flex items-center gap-3">
-                  <div className="text-xs text-slate-400">{it.source}</div>
-                  <div>
-                    <SentimentPill s={it.sentiment} />
-                  </div>
-                  <div className="text-xs text-slate-400">
-                    {it.tickers?.map((t) => (
-                      <span key={t} className="px-2 py-0.5 mr-1 rounded bg-slate-800/20 text-xs">
-                        {t}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mt-2 text-sm text-slate-300 line-clamp-2">{it.summary}</div>
-              </div>
-
-              <div className="ml-4 flex flex-col items-end text-xs text-slate-400">
-                <div>{it.tags?.map((tg) => <span key={tg} className="mr-1">#{tg}</span>)}</div>
-                <ChevronRight className="w-5 h-5 text-slate-400" />
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  </div>
-</div>
-
-        {/* Right: expanded article preview */}
-
       </div>
     </div>
   );
