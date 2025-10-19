@@ -184,26 +184,90 @@ async def _process_rss_feed(session: aiohttp.ClientSession, feed_url: str) -> Li
     return results
 
 
+# Replace the existing _process_direct_site with this async implementation
+
+from urllib.parse import urljoin
+
 async def _process_direct_site(session: aiohttp.ClientSession, url: str) -> List[NewsItem]:
-    # Minimal direct scraping — site-specific spider is better in prod
-    html = await _fetch_html(session, url)
-    if not html:
+    """
+    Async site-specific scraper for DIRECT_SITES.
+    - attempts to find <h2 class="headline"> elements (LiveMint style) and extract title + link
+    - returns a list of NewsItem objects (may be empty)
+    NOTE: keep this minimal — for robust scraping of multiple sites use site-specific spiders or Scrapy.
+    """
+    try:
+        html = await _fetch_html(session, url)
+        if not html:
+            return []
+        soup = BeautifulSoup(html, "lxml")
+    except Exception:
         return []
-    soup = BeautifulSoup(html, "lxml")
+
     items: List[NewsItem] = []
-    # try to find article-like elements
-    news = soup.find_all('h2')
-    for i in news:
-    # print(i)
-        news_text, news_link = i.get_text(), url+i.a['href']
-        # print(news_text, news_link)
-        news_list = {
-            "news" : news_text,
-            "link" : news_link,
-            "source" : "mint"
-        }
-    print("Fetched News:", news_list)
-    return news_list
+
+    # --- Example: LiveMint-like structure: <h2 class="headline"><a href="...">Title</a></h2>
+    # Try the specific selector first
+    heads = soup.find_all("h2", class_="headline")
+    if not heads:
+        # fallback: any h2 (as your earlier code used) but prefer classed headlines
+        heads = soup.find_all("h2")
+
+    for h in heads[:40]:  # limit per page
+        try:
+            # Attempt to find anchor inside h2
+            a = h.find("a")
+            title = (a.get_text(strip=True) if a else h.get_text(strip=True)) or None
+            if not title:
+                continue
+
+            # resolve link (if relative)
+            href = None
+            if a and a.get("href"):
+                href = a.get("href")
+            else:
+                # try to find link sibling or parent link
+                parent_a = h.find_parent("a")
+                if parent_a and parent_a.get("href"):
+                    href = parent_a.get("href")
+
+            if href:
+                link = urljoin(url, href)
+            else:
+                # fallback to page url (less ideal)
+                link = url
+
+            nid = _mk_id(link, title)
+            if nid in _seen_ids:
+                continue
+
+            # try to fetch article page for summary (best-effort)
+            article_html = await _fetch_html(session, link)
+            summary = _extract_summary_from_html(article_html or "")
+
+            # fallback short summary from the headline itself
+            if not summary:
+                summary = title if len(title) < 280 else title[:277] + "..."
+
+            dt = datetime.now(timezone.utc)
+            itm = NewsItem(
+                id=nid,
+                headline=title,
+                source="LiveMint" if "livemint" in url.lower() else url,  # simple source label
+                ts=_to_iso_struct(dt),
+                summary=summary,
+                sentiment=_heuristic_sentiment(title + " " + (summary or "")),
+                tickers=_extract_tickers(title),
+                tags=[],
+                url=link,
+            )
+
+            items.append(itm)
+        except Exception:
+            # individual article errors shouldn't break the loop
+            continue
+
+    return items
+
 
 
 # --- Core periodic job ---
