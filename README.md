@@ -21,6 +21,9 @@
 ---
 
 ## 📖 Overview
+<p align="center">
+  <img src="preview.png" alt="Oriza Banner" width="100%" />
+</p>
 **Oriza** is a Bloomberg-like terminal for the **commodities world**, starting with energy (Natural Gas, Crude, etc.) and extending to agriculture, metals, and beyond.  
 The platform ingests **market data, supply-demand drivers, weather, alternative data, and macro events** into one **real-time, customizable dashboard**.
 
