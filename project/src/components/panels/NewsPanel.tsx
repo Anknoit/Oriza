@@ -28,24 +28,16 @@ const POLL_FALLBACK_INTERVAL_MS = 10_000;
 /* -------------------------
    Helpers / URL utils
    ------------------------- */
-const getApiBase = () => {
-  if (typeof window === "undefined") return "http://localhost:8000";
-  return import.meta.env.VITE_API_BASE || `${window.location.protocol}//${window.location.host}`;
-};
-
 const getApiUrl = (path = "/news") => {
-  const base = getApiBase().replace(/\/$/, "");
-  return path.startsWith("/") ? `${base}${path}` : `${base}/${path}`;
+  // Use /api prefix for proxied API calls through Vite dev server
+  if (path.startsWith("/")) {
+    return `/api${path}`;
+  }
+  return `/api/${path}`;
 };
 
 const getWsUrl = (path = "/ws/news") => {
-  if (typeof window === "undefined") return "ws://localhost:8000/ws/news";
-  const base = import.meta.env.VITE_API_BASE;
-  if (base) {
-    const url = new URL(base);
-    const proto = url.protocol === "https:" ? "wss:" : "ws:";
-    return `${proto}//${url.host}${path}`;
-  }
+  // Use proxied WebSocket through Vite dev server
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
   const host = window.location.host;
   return `${protocol}://${host}${path}`;
